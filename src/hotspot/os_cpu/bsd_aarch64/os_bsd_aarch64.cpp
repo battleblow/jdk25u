@@ -623,7 +623,6 @@ extern "C" {
         *(to--) = *(from--);
     }
   }
-
   void _Copy_conjoint_jlongs_atomic(const jlong* from, jlong* to, size_t count) {
     if (from > to) {
       const jlong *end = from + count;

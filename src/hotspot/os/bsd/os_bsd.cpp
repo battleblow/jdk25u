@@ -766,7 +766,7 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
     // pthread_attr_setstacksize() function can fail
     // if the stack size exceeds a system-imposed limit.
     assert_status(status == EINVAL, status, "pthread_attr_setstacksize");
-    log_warning(os, thread)("The %sthread stack size specified is invalid: " SIZE_FORMAT "k",
+    log_warning(os, thread)("The %sthread stack size specified is invalid: %zuk",
                             (thr_type == compiler_thread) ? "compiler " : ((thr_type == java_thread) ? "" : "VM "),
                             stack_size / K);
     thread->set_osthread(nullptr);
@@ -1255,6 +1255,21 @@ void * os::dll_load(const char *filename, char *ebuf, int ebuflen) {
     return result;
   }
 
+  if (ebuf == nullptr || ebuflen < 1) {
+    // no error reporting requested
+    return nullptr;
+  }
+  const char* error_report = ::dlerror();
+  if (error_report == nullptr) {
+    error_report = "dlerror returned no error description";
+  }
+  if (ebuf != nullptr && ebuflen > 0) {
+    ::strncpy(ebuf, error_report, ebuflen-1);
+    ebuf[ebuflen-1]='\0';
+  }
+
+  Events::log_dll_message(nullptr, "Loading shared library %s failed, %s", filename, error_report);
+  log_info(os)("shared library load of %s failed, %s", filename, error_report);
   int diag_msg_max_length=ebuflen-strlen(ebuf);
   char* diag_msg_buf=ebuf+strlen(ebuf);
 

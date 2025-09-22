@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2016, 2025, Oracle and/or its affiliates. All rights reserved.
  * Copyright (c) 2016, 2024 SAP SE. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
@@ -25,7 +25,6 @@
 
 // This file is organized as os_linux_x86.cpp.
 
-// no precompiled headers
 #include "asm/assembler.inline.hpp"
 #include "classfile/vmSymbols.hpp"
 #include "code/nativeInst.hpp"
@@ -154,6 +153,11 @@ frame os::fetch_compiled_frame_from_context(const void* ucVoid) {
   intptr_t* sp = os::Linux::ucontext_get_sp(uc);
   address lr = ucontext_get_lr(uc);
   return frame(sp, lr);
+}
+
+intptr_t* os::fetch_bcp_from_context(const void* ucVoid) {
+  Unimplemented();
+  return nullptr;
 }
 
 frame os::get_sender_for_C_frame(frame* fr) {

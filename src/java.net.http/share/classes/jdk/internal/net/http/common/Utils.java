@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 2015, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -38,6 +38,7 @@ import java.io.UncheckedIOException;
 import java.lang.System.Logger.Level;
 import java.net.ConnectException;
 import java.net.InetSocketAddress;
+import java.net.Proxy;
 import java.net.URI;
 import java.net.http.HttpHeaders;
 import java.net.http.HttpTimeoutException;
@@ -57,6 +58,7 @@ import java.util.HexFormat;
 import java.util.List;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
@@ -77,7 +79,6 @@ import sun.net.www.HeaderParser;
 
 import static java.lang.String.format;
 import static java.nio.charset.StandardCharsets.US_ASCII;
-import static java.util.stream.Collectors.joining;
 import static java.net.Authenticator.RequestorType.PROXY;
 import static java.net.Authenticator.RequestorType.SERVER;
 
@@ -186,6 +187,18 @@ public final class Utils {
 
     public static final BiPredicate<String, String>
             ALLOWED_HEADERS = (header, unused) -> !DISALLOWED_HEADERS_SET.contains(header);
+
+    private static final Set<String> DISALLOWED_REDIRECT_HEADERS_SET = getDisallowedRedirectHeaders();
+
+    private static Set<String> getDisallowedRedirectHeaders() {
+        Set<String> headers = new TreeSet<>(String.CASE_INSENSITIVE_ORDER);
+        headers.addAll(Set.of("Authorization", "Cookie", "Origin", "Referer", "Host"));
+
+        return Collections.unmodifiableSet(headers);
+    }
+
+    public static final BiPredicate<String, String>
+            ALLOWED_REDIRECT_HEADERS = (header, _) -> !DISALLOWED_REDIRECT_HEADERS_SET.contains(header);
 
     public static final BiPredicate<String, String> VALIDATE_USER_HEADER =
             (name, value) -> {
@@ -306,6 +319,17 @@ public final class Utils {
     public static boolean proxyHasDisabledSchemes(boolean tunnel) {
         return tunnel ? ! PROXY_AUTH_TUNNEL_DISABLED_SCHEMES.isEmpty()
                       : ! PROXY_AUTH_DISABLED_SCHEMES.isEmpty();
+    }
+
+    /**
+     * Creates a new {@link Proxy} instance for the given proxy iff it is
+     * neither null, {@link Proxy#NO_PROXY Proxy.NO_PROXY}, nor already a
+     * {@code Proxy} instance.
+     */
+    public static Proxy copyProxy(Proxy proxy) {
+        return proxy == null || proxy.getClass() == Proxy.class
+                ? proxy
+                : new Proxy(proxy.type(), proxy.address());
     }
 
     // WebSocket connection Upgrade headers
@@ -1132,5 +1156,32 @@ public final class Utils {
             }
         }
         return sb.toString();
+    }
+
+    /**
+     * {@return the exception the given {@code cf} was completed with,
+     * or a {@link CancellationException} if the given {@code cf} was
+     * cancelled}
+     *
+     * @param cf a {@code CompletableFuture} exceptionally completed
+     * @throws IllegalArgumentException if the given cf was not
+     *    {@linkplain CompletableFuture#isCompletedExceptionally()
+     *    completed exceptionally}
+     */
+    public static Throwable exceptionNow(CompletableFuture<?> cf) {
+        if (cf.isCompletedExceptionally()) {
+            if (cf.isCancelled()) {
+                try {
+                    cf.join();
+                } catch (CancellationException x) {
+                    return x;
+                } catch (CompletionException x) {
+                    return x.getCause();
+                }
+            } else {
+                return cf.exceptionNow();
+            }
+        }
+        throw new IllegalArgumentException("cf is not completed exceptionally");
     }
 }

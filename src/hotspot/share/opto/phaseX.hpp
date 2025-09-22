@@ -608,6 +608,7 @@ protected:
 // Should be replaced with combined CCP & GVN someday.
 class PhaseCCP : public PhaseIterGVN {
   Unique_Node_List _root_and_safepoints;
+  Unique_Node_List _maybe_top_type_nodes;
   // Non-recursive.  Use analysis to transform single Node.
   virtual Node* transform_once(Node* n);
 
@@ -626,6 +627,8 @@ class PhaseCCP : public PhaseIterGVN {
   void push_and(Unique_Node_List& worklist, const Node* parent, const Node* use) const;
   void push_cast_ii(Unique_Node_List& worklist, const Node* parent, const Node* use) const;
   void push_opaque_zero_trip_guard(Unique_Node_List& worklist, const Node* use) const;
+  void push_bool_with_cmpu_and_mask(Unique_Node_List& worklist, const Node* use) const;
+  void push_bool_matching_case1b(Unique_Node_List& worklist, const Node* cmpu) const;
 
  public:
   PhaseCCP( PhaseIterGVN *igvn ); // Compute conditional constants

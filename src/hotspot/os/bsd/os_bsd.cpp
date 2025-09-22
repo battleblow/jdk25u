@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999, 2024, Oracle and/or its affiliates. All rights reserved.
+ * Copyright (c) 1999, 2025, Oracle and/or its affiliates. All rights reserved.
  * DO NOT ALTER OR REMOVE COPYRIGHT NOTICES OR THIS FILE HEADER.
  *
  * This code is free software; you can redistribute it and/or modify it
@@ -22,7 +22,6 @@
  *
  */
 
-// no precompiled headers
 #include "classfile/vmSymbols.hpp"
 #include "code/vtableStubs.hpp"
 #include "compiler/compileBroker.hpp"
@@ -54,9 +53,7 @@
 #include "runtime/perfMemory.hpp"
 #include "runtime/semaphore.hpp"
 #include "runtime/sharedRuntime.hpp"
-#include "runtime/statSampler.hpp"
 #include "runtime/stubRoutines.hpp"
-#include "runtime/threadCritical.hpp"
 #include "runtime/threads.hpp"
 #include "runtime/timer.hpp"
 #include "runtime/vm_version.hpp"
@@ -151,9 +148,6 @@
 
 #define MAX_PATH    (2 * K)
 
-// for timer info max values which include all bits
-#define ALL_64_BITS CONST64(0xFFFFFFFFFFFFFFFF)
-
 ////////////////////////////////////////////////////////////////////////////////
 // global variables
 julong os::Bsd::_physical_memory = 0;
@@ -185,7 +179,9 @@ julong os::free_memory() {
   return Bsd::available_memory();
 }
 
-// available here means free
+// Available here means free. Note that this number is of no much use. As an estimate
+// for future memory pressure it is far too conservative, since MacOS will use a lot
+// of unused memory for caches, and return it willingly in case of needs.
 julong os::Bsd::available_memory() {
   uint64_t available = physical_memory() >> 2;
 #ifdef __APPLE__
@@ -360,16 +356,6 @@ static char cpu_arch[] = "ppc64";
 #else
   #error Add appropriate cpu_arch setting
 #endif
-
-// JVM variant
-#if   defined(ZERO)
-  #define JVM_VARIANT "zero"
-#elif defined(COMPILER2)
-  #define JVM_VARIANT "server"
-#else
-  #define JVM_VARIANT "client"
-#endif
-
 
 void os::Bsd::initialize_system_info() {
   int mib[2];
@@ -730,7 +716,7 @@ static void *thread_native_entry(Thread *thread) {
     }
   }
 
-  log_info(os, thread)("Thread is alive (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+  log_info(os, thread)("Thread is alive (tid: %zu, pthread id: %zu).",
     os::current_thread_id(), (uintx) pthread_self());
 
   // call one more level start routine
@@ -740,7 +726,7 @@ static void *thread_native_entry(Thread *thread) {
   // Prevent dereferencing it from here on out.
   thread = nullptr;
 
-  log_info(os, thread)("Thread finished (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT ").",
+  log_info(os, thread)("Thread finished (tid: %zu, pthread id: %zu).",
     os::current_thread_id(), (uintx) pthread_self());
 
   return nullptr;
@@ -763,7 +749,12 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
 
   // init thread attributes
   pthread_attr_t attr;
-  pthread_attr_init(&attr);
+  int rslt = pthread_attr_init(&attr);
+  if (rslt != 0) {
+    thread->set_osthread(nullptr);
+    delete osthread;
+    return false;
+  }
   pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
 
   // calculate stack size if it's not specified by caller
@@ -788,14 +779,27 @@ bool os::create_thread(Thread* thread, ThreadType thr_type,
     ResourceMark rm;
     pthread_t tid;
     int ret = 0;
-    int limit = 3;
-    do {
+    int trials_remaining = 4;
+    useconds_t next_delay = 1000;
+    while (true) {
       ret = pthread_create(&tid, &attr, (void* (*)(void*)) thread_native_entry, thread);
-    } while (ret == EAGAIN && limit-- > 0);
+
+      if (ret != EAGAIN) {
+        break;
+      }
+
+      if (--trials_remaining <= 0) {
+        break;
+      }
+
+      log_debug(os, thread)("Failed to start native thread (%s), retrying after %dus.", os::errno_name(ret), next_delay);
+      ::usleep(next_delay);
+      next_delay *= 2;
+    }
 
     char buf[64];
     if (ret == 0) {
-      log_info(os, thread)("Thread \"%s\" started (pthread id: " UINTX_FORMAT ", attributes: %s). ",
+      log_info(os, thread)("Thread \"%s\" started (pthread id: %zu, attributes: %s). ",
                            thread->name(), (uintx) tid, os::Posix::describe_pthread_attr(buf, sizeof(buf), &attr));
     } else {
       log_warning(os, thread)("Failed to start thread \"%s\" - pthread_create failed (%s) for attributes: %s.",
@@ -879,8 +883,8 @@ bool os::create_attached_thread(JavaThread* thread) {
   // and save the caller's signal mask
   PosixSignals::hotspot_sigmask(thread);
 
-  log_info(os, thread)("Thread attached (tid: " UINTX_FORMAT ", pthread id: " UINTX_FORMAT
-                       ", stack: " PTR_FORMAT " - " PTR_FORMAT " (" SIZE_FORMAT "K) ).",
+  log_info(os, thread)("Thread attached (tid: %zu, pthread id: %zu"
+                       ", stack: " PTR_FORMAT " - " PTR_FORMAT " (%zuK) ).",
                        os::current_thread_id(), (uintx) pthread_self(),
                        p2i(thread->stack_base()), p2i(thread->stack_end()), thread->stack_size() / K);
   return true;
@@ -963,7 +967,7 @@ jlong os::javaTimeNanos() {
 }
 
 void os::javaTimeNanos_info(jvmtiTimerInfo *info_ptr) {
-  info_ptr->max_value = ALL_64_BITS;
+  info_ptr->max_value = all_bits_jlong;
   info_ptr->may_skip_backward = false;      // not subject to resetting or drifting
   info_ptr->may_skip_forward = false;       // not subject to resetting or drifting
   info_ptr->kind = JVMTI_TIMER_ELAPSED;     // elapsed not CPU time
@@ -1702,7 +1706,7 @@ static void get_swap_info(int *total_pages, int *used_pages) {
 
 void os::print_memory_info(outputStream* st) {
   st->print("Memory:");
-  st->print(" " SIZE_FORMAT "k page", os::vm_page_size()>>10);
+  st->print(" %zuk page", os::vm_page_size()>>10);
 
   st->print(", physical " UINT64_FORMAT "k",
             os::physical_memory() >> 10);
@@ -1762,70 +1766,44 @@ void os::jvm_path(char *buf, jint buflen) {
     return;
   }
 
-  if (Arguments::sun_java_launcher_is_altjvm()) {
-    // Support for the java launcher's '-XXaltjvm=<path>' option. Typical
-    // value for buf is "<JAVA_HOME>/jre/lib/<arch>/<vmtype>/libjvm.so"
-    // or "<JAVA_HOME>/jre/lib/<vmtype>/libjvm.dylib". If "/jre/lib/"
-    // appears at the right place in the string, then assume we are
-    // installed in a JDK and we're done. Otherwise, check for a
-    // JAVA_HOME environment variable and construct a path to the JVM
-    // being overridden.
+  // If executing unit tests we require JAVA_HOME to point to the real JDK.
+  if (Arguments::executing_unit_tests()) {
+    // Look for JAVA_HOME in the environment.
+    char* java_home_var = ::getenv("JAVA_HOME");
+    if (java_home_var != nullptr && java_home_var[0] != 0) {
 
-    const char *p = buf + strlen(buf) - 1;
-    for (int count = 0; p > buf && count < 5; ++count) {
-      for (--p; p > buf && *p != '/'; --p)
-        /* empty */ ;
-    }
+      // Check the current module name "libjvm"
+      const char* p = strrchr(buf, '/');
+      assert(strstr(p, "/libjvm") == p, "invalid library name");
 
-    if (strncmp(p, "/jre/lib/", 9) != 0) {
-      // Look for JAVA_HOME in the environment.
-      char* java_home_var = ::getenv("JAVA_HOME");
-      if (java_home_var != nullptr && java_home_var[0] != 0) {
-        char* jrelib_p;
-        int len;
+      stringStream ss(buf, buflen);
+      rp = os::realpath(java_home_var, buf, buflen);
+      if (rp == nullptr) {
+        return;
+      }
 
-        // Check the current module name "libjvm"
-        p = strrchr(buf, '/');
-        assert(strstr(p, "/libjvm") == p, "invalid library name");
+      assert((int)strlen(buf) < buflen, "Ran out of buffer space");
+      // Add the appropriate library and JVM variant subdirs
+      ss.print("%s/lib/%s", buf, Abstract_VM_Version::vm_variant());
 
-        rp = os::realpath(java_home_var, buf, buflen);
+      if (0 != access(buf, F_OK)) {
+        ss.reset();
+        ss.print("%s/lib", buf);
+      }
+
+      // If the path exists within JAVA_HOME, add the JVM library name
+      // to complete the path to JVM being overridden.  Otherwise fallback
+      // to the path to the current library.
+      if (0 == access(buf, F_OK)) {
+        // Use current module name "libjvm"
+        ss.print("/libjvm%s", JNI_LIB_SUFFIX);
+        assert(strcmp(buf + strlen(buf) - strlen(JNI_LIB_SUFFIX), JNI_LIB_SUFFIX) == 0,
+               "buf has been truncated");
+      } else {
+        // Fall back to path of current library
+        rp = os::realpath(dli_fname, buf, buflen);
         if (rp == nullptr) {
           return;
-        }
-
-        // determine if this is a legacy image or modules image
-        // modules image doesn't have "jre" subdirectory
-        len = strlen(buf);
-        assert(len < buflen, "Ran out of buffer space");
-        jrelib_p = buf + len;
-
-        // Add the appropriate library subdir
-        snprintf(jrelib_p, buflen-len, "/jre/lib");
-        if (0 != access(buf, F_OK)) {
-          snprintf(jrelib_p, buflen-len, "/lib");
-        }
-
-        // Add the appropriate JVM variant subdir
-        len = strlen(buf);
-        jrelib_p = buf + len;
-        snprintf(jrelib_p, buflen-len, "/%s", JVM_VARIANT);
-        if (0 != access(buf, F_OK)) {
-          snprintf(jrelib_p, buflen-len, "%s", "");
-        }
-
-        // If the path exists within JAVA_HOME, add the JVM library name
-        // to complete the path to JVM being overridden.  Otherwise fallback
-        // to the path to the current library.
-        if (0 == access(buf, F_OK)) {
-          // Use current module name "libjvm"
-          len = strlen(buf);
-          snprintf(buf + len, buflen-len, "/libjvm%s", JNI_LIB_SUFFIX);
-        } else {
-          // Fall back to path of current library
-          rp = os::realpath(dli_fname, buf, buflen);
-          if (rp == nullptr) {
-            return;
-          }
         }
       }
     }
@@ -1840,7 +1818,7 @@ void os::jvm_path(char *buf, jint buflen) {
 
 static void warn_fail_commit_memory(char* addr, size_t size, bool exec,
                                     int err) {
-  warning("INFO: os::commit_memory(" INTPTR_FORMAT ", " SIZE_FORMAT
+  warning("INFO: os::commit_memory(" INTPTR_FORMAT ", %zu"
           ", %d) failed; error='%s' (errno=%d)", (intptr_t)addr, size, exec,
            os::errno_name(err), err);
 }
@@ -2725,14 +2703,14 @@ jlong os::thread_cpu_time(Thread *thread, bool user_sys_cpu_time) {
 
 
 void os::current_thread_cpu_time_info(jvmtiTimerInfo *info_ptr) {
-  info_ptr->max_value = ALL_64_BITS;       // will not wrap in less than 64 bits
+  info_ptr->max_value = all_bits_jlong;    // will not wrap in less than 64 bits
   info_ptr->may_skip_backward = false;     // elapsed time not wall time
   info_ptr->may_skip_forward = false;      // elapsed time not wall time
   info_ptr->kind = JVMTI_TIMER_TOTAL_CPU;  // user+system time is returned
 }
 
 void os::thread_cpu_time_info(jvmtiTimerInfo *info_ptr) {
-  info_ptr->max_value = ALL_64_BITS;       // will not wrap in less than 64 bits
+  info_ptr->max_value = all_bits_jlong;    // will not wrap in less than 64 bits
   info_ptr->may_skip_backward = false;     // elapsed time not wall time
   info_ptr->may_skip_forward = false;      // elapsed time not wall time
   info_ptr->kind = JVMTI_TIMER_TOTAL_CPU;  // user+system time is returned
@@ -2813,7 +2791,7 @@ bool os::start_debugging(char *buf, int buflen) {
   jio_snprintf(p, buflen-len,
              "\n\n"
              "Do you want to debug the problem?\n\n"
-             "To debug, run 'gdb /proc/%d/exe %d'; then switch to thread " INTX_FORMAT " (" INTPTR_FORMAT ")\n"
+             "To debug, run 'gdb /proc/%d/exe %d'; then switch to thread %zd (" INTPTR_FORMAT ")\n"
              "Enter 'yes' to launch gdb automatically (PATH must include gdb)\n"
              "Otherwise, press RETURN to abort...",
              os::current_process_id(), os::current_process_id(),

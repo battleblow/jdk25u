@@ -206,22 +206,6 @@ public class SubmissionPublisher<T> implements Publisher<T>,
             (n >= BUFFER_CAPACITY_LIMIT) ? BUFFER_CAPACITY_LIMIT : n + 1;
     }
 
-    // default Executor setup; nearly the same as CompletableFuture
-
-    /**
-     * Default executor -- ForkJoinPool.commonPool() unless it cannot
-     * support parallelism.
-     */
-    private static final Executor ASYNC_POOL =
-        (ForkJoinPool.getCommonPoolParallelism() > 1) ?
-        ForkJoinPool.commonPool() : new ThreadPerTaskExecutor();
-
-    /** Fallback if ForkJoinPool.commonPool() cannot support parallelism */
-    private static final class ThreadPerTaskExecutor implements Executor {
-        ThreadPerTaskExecutor() {}      // prevent access constructor creation
-        public void execute(Runnable r) { new Thread(r).start(); }
-    }
-
     /**
      * Clients (BufferedSubscriptions) are maintained in a linked list
      * (via their "next" fields). This works well for publish loops.
@@ -308,15 +292,13 @@ public class SubmissionPublisher<T> implements Publisher<T>,
 
     /**
      * Creates a new SubmissionPublisher using the {@link
-     * ForkJoinPool#commonPool()} for async delivery to subscribers
-     * (unless it does not support a parallelism level of at least two,
-     * in which case, a new Thread is created to run each task), with
+     * ForkJoinPool#commonPool()} for async delivery to subscribers, with
      * maximum buffer capacity of {@link Flow#defaultBufferSize}, and no
      * handler for Subscriber exceptions in method {@link
      * Flow.Subscriber#onNext(Object) onNext}.
      */
     public SubmissionPublisher() {
-        this(ASYNC_POOL, Flow.defaultBufferSize(), null);
+        this(ForkJoinPool.asyncCommonPool(), Flow.defaultBufferSize(), null);
     }
 
     /**
@@ -1048,7 +1030,6 @@ public class SubmissionPublisher<T> implements Publisher<T>,
      * assignment coding style. Also, all methods and fields have
      * default visibility to simplify usage by callers.
      */
-    @SuppressWarnings("serial")
     @jdk.internal.vm.annotation.Contended
     static final class BufferedSubscription<T>
         implements Subscription, ForkJoinPool.ManagedBlocker {

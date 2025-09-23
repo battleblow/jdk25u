@@ -87,6 +87,7 @@ void StackOverflow::create_stack_guard_pages() {
       os::is_primordial_thread()) {
 #else
       (DisablePrimordialThreadGuardPages && os::is_primordial_thread())) {
+#endif
       log_info(os, thread)("Stack guard page creation for thread %zu disabled", os::current_thread_id());
     return;
   }

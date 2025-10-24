@@ -190,7 +190,9 @@ JNIEXPORT jlong JNICALL
 Java_com_sun_management_internal_OperatingSystemImpl_getCommittedVirtualMemorySize0
   (JNIEnv *env, jobject mbean)
 {
-#if defined(__FreeBSD__) && __FreeBSD__ >= 15
+  // getrlimitusage(2) was introduced in FreeBSD 14.2 (even if the man
+  // page says FreeBSD 15.)
+#if defined(__FreeBSD__) && __FreeBSD_version >= 1402000
   rlim_t vmm_usage;
 
   int result = getrlimitusage(RLIMIT_AS, 0, &vmm_usage);
@@ -210,7 +212,9 @@ JNIEXPORT jlong JNICALL
 Java_com_sun_management_internal_OperatingSystemImpl_getOpenFileDescriptorCount0
   (JNIEnv *env, jobject mbean)
 {
-#if defined(__FreeBSD__) && __FreeBSD__ >= 15
+  // getrlimitusage(2) was introduced in FreeBSD 14.2 (even if the man
+  // page says FreeBSD 15.)
+#if defined(__FreeBSD__) && __FreeBSD_version >= 1402000
     rlim_t nfiles;
 
     int result = getrlimitusage(RLIMIT_NOFILE, 0, &nfiles);

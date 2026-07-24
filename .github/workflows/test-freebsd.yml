@@ -183,7 +183,7 @@ jobs:
           usesh: true
           prepare: |
             mount -t procfs proc /proc
-            pkg install -y openjdk24 gnugrep gtar zip unzip cups bash gmake dwz libiconv harfbuzz lcms2 png giflib jpeg-turbo gsed
+            pkg install -y openjdk25 gnugrep gtar zip unzip cups bash gmake dwz libiconv harfbuzz lcms2 png giflib jpeg-turbo gsed
           run: >
             gmake test-prebuilt
             SED=/usr/local/bin/gsed
